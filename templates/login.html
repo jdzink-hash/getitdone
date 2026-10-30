@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include "_head.html" %}
+  <title>Sign in · Get It Done</title>
+</head>
+<body>
+<main class="auth">
+  <div class="auth-card">
+
+    <form class="auth-step" id="step-email">
+      <h1>Get it done.</h1>
+      <p>Your day, your groceries, your plans, all in one calm place. Sign in with your email.</p>
+      <input class="field" id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+      <button class="btn" type="submit">Email me a code</button>
+    </form>
+
+    <form class="auth-step" id="step-code" hidden>
+      <h1>Check your inbox.</h1>
+      <p>We sent a 6-digit code to <span id="sent-to"></span>.</p>
+      <input class="field code-input" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="······" required>
+      <button class="btn" type="submit">Sign in</button>
+      <div style="margin-top:14px; text-align:center">
+        <button class="link-btn" type="button" id="back">Use a different email</button>
+      </div>
+    </form>
+
+    <form class="auth-step" id="step-name" hidden>
+      <h1>Nice to meet you.</h1>
+      <p>What should we call you in your morning emails?</p>
+      <input class="field" id="name" autocomplete="given-name" placeholder="Your first name" maxlength="60" required>
+      <button class="btn" type="submit">Let's go</button>
+    </form>
+
+    <div class="auth-error" id="error" role="alert"></div>
+    <div class="auth-foot">We'll email you a sign-in code, plus a short summary of your day each morning. You can turn the morning email off any time in Settings.</div>
+  </div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let email = "";
+
+  async function post(path, body) {
+    const res = await fetch(path, {
+      method: path === "/api/me" ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json", "X-Requested-With": "fetch" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Something went wrong.");
+    return data;
+  }
+
+  function show(id) {
+    for (const step of document.querySelectorAll(".auth-step")) step.hidden = step.id !== id;
+    $("error").textContent = "";
+    const input = $(id).querySelector("input");
+    if (input) input.focus();
+  }
+
+  function handle(formId, fn) {
+    $(formId).addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = $(formId).querySelector("button[type=submit]");
+      btn.disabled = true;
+      $("error").textContent = "";
+      try { await fn(); } catch (err) { $("error").textContent = err.message; }
+      finally { btn.disabled = false; }
+    });
+  }
+
+  handle("step-email", async () => {
+    const data = await post("/auth/start", { email: $("email").value });
+    email = data.email;
+    $("sent-to").textContent = email;
+    show("step-code");
+    if (data.dev_code) {
+      $("code").value = data.dev_code;
+      $("error").textContent = "Dev mode: email isn't set up, so the code was filled in for you.";
+    }
+  });
+
+  handle("step-code", async () => {
+    const data = await post("/auth/verify", {
+      email,
+      code: $("code").value,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+    if (data.needs_name) show("step-name");
+    else location.href = "/";
+  });
+
+  handle("step-name", async () => {
+    await post("/api/me", { name: $("name").value });
+    location.href = "/";
+  });
+
+  $("back").addEventListener("click", () => show("step-email"));
+  $("email").focus();
+</script>
+</body>
+</html>

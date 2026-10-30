@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include "_head.html" %}
+  <title>Get It Done</title>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="topbar">
+      <p class="greeting" id="greeting"></p>
+      <span class="brand">Get it done.</span>
+    </div>
+    <h1 class="date-title" id="date-title"></h1>
+  </header>
+
+  <nav class="nav" id="nav">
+    <a href="#today">Today</a>
+    <a href="#calendar">Calendar</a>
+    <a href="#groceries">Groceries</a>
+    <a href="#appointments">Appointments</a>
+    <a href="#exercise">Exercise</a>
+    <a href="#settings">Settings</a>
+  </nav>
+
+  <main id="view"></main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>window.ME = {{ me | tojson }};</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
