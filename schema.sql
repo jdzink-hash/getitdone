@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS users (
   id             INTEGER PRIMARY KEY,
-  email          TEXT UNIQUE NOT NULL,
+  email          TEXT NOT NULL DEFAULT '',
   name           TEXT NOT NULL DEFAULT '',
   timezone       TEXT NOT NULL DEFAULT 'America/New_York',
   send_time      TEXT NOT NULL DEFAULT '07:00',
@@ -8,14 +8,6 @@ CREATE TABLE IF NOT EXISTS users (
   last_sent_date TEXT,
   feed_token     TEXT,
   created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS login_codes (
-  email      TEXT PRIMARY KEY,
-  code_hash  TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  sent_at    INTEGER NOT NULL,
-  attempts   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

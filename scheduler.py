@@ -22,7 +22,7 @@ def send_due_digests():
     conn = db.connect()
     try:
         now = datetime.now(timezone.utc)
-        users = conn.execute("SELECT * FROM users WHERE digest_enabled = 1").fetchall()
+        users = conn.execute("SELECT * FROM users WHERE digest_enabled = 1 AND email != ''").fetchall()
         for user in users:
             try:
                 local = now.astimezone(ZoneInfo(user["timezone"]))

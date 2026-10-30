@@ -30,18 +30,18 @@ if os.environ.get("TRUST_PROXY") == "1":
 
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 if not os.environ.get("SECRET_KEY"):
-    log.warning("SECRET_KEY not set: using a temporary key, so sign-ins reset when the server restarts.")
+    log.warning("SECRET_KEY not set: using a temporary key, so remembered devices reset when the server restarts.")
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY") or secrets.token_hex(32),
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("SECURE_COOKIES") == "1",
-    PERMANENT_SESSION_LIFETIME=timedelta(days=60),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=365),
 )
 app.teardown_appcontext(db.close_db)
 
-CODE_TTL = 10 * 60
-CODE_RESEND_WAIT = 30
-CODE_MAX_ATTEMPTS = 5
+# The whole site belongs to one person. Opening /?key=<ACCESS_KEY> once remembers the device.
+ACCESS_KEY = os.environ.get("ACCESS_KEY", "")
+OWNER_NAME = os.environ.get("OWNER_NAME") or "Andrina"
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -69,26 +69,39 @@ def valid_timezone(name):
         return False
 
 
-def hash_code(email, code):
-    return hmac.new(app.config["SECRET_KEY"].encode(), f"{email}:{code}".encode(), hashlib.sha256).hexdigest()
+def access_fingerprint():
+    # Stored in the cookie instead of the key itself; changing ACCESS_KEY forgets every device.
+    return hashlib.sha256(f"access:{ACCESS_KEY}".encode()).hexdigest()
 
 
-def current_user():
-    uid = session.get("uid")
-    if not uid:
-        return None
-    return db.get_db().execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+def has_access():
+    if not ACCESS_KEY:
+        return app.debug  # open when running locally; a real server without a key stays locked
+    return hmac.compare_digest(session.get("access", ""), access_fingerprint())
 
 
-def login_required(view):
+def owner():
+    conn = db.get_db()
+    user = conn.execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
+    if user is None:
+        tz = os.environ.get("OWNER_TIMEZONE") or "America/New_York"
+        conn.execute(
+            "INSERT INTO users (email, name, timezone) VALUES (?, ?, ?)",
+            (normalize_email(os.environ.get("OWNER_EMAIL")) or "", OWNER_NAME, tz if valid_timezone(tz) else "UTC"),
+        )
+        conn.commit()
+        user = conn.execute("SELECT * FROM users ORDER BY id LIMIT 1").fetchone()
+    return user
+
+
+def access_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        user = current_user()
-        if user is None:
+        if not has_access():
             if request.path.startswith("/api/"):
-                return error("Not signed in", 401)
-            return redirect(url_for("login"))
-        g.user = user
+                return error("This list is private.", 403)
+            return render_template("private.html"), 403
+        g.user = owner()
         return view(*args, **kwargs)
 
     return wrapped
@@ -107,7 +120,6 @@ def feed_url(user):
 
 def user_json(user):
     return {
-        "id": user["id"],
         "email": user["email"],
         "name": user["name"],
         "timezone": user["timezone"],
@@ -127,111 +139,41 @@ def csrf_guard():
 # ---------- pages ----------
 
 @app.get("/")
-@login_required
 def home():
+    key = request.args.get("key")
+    if key is not None:
+        if ACCESS_KEY and hmac.compare_digest(key, ACCESS_KEY):
+            session.permanent = True
+            session["access"] = access_fingerprint()
+        return redirect(url_for("home"))  # drop the key from the address bar either way
+    return show_app()
+
+
+@access_required
+def show_app():
     return render_template("app.html", me=user_json(g.user))
 
 
-@app.get("/login")
-def login():
-    if current_user():
-        return redirect(url_for("home"))
-    return render_template("login.html")
-
-
-# ---------- auth ----------
-
-@app.post("/auth/start")
-def auth_start():
-    email = normalize_email((request.get_json(silent=True) or {}).get("email"))
-    if not email:
-        return error("That doesn't look like an email address.")
-    # Dev mode hands the code to the browser, so it must never happen on a real server.
-    if not mailer.configured() and not app.debug:
-        log.error("Sign-in attempted but SMTP isn't configured")
-        return error("Sign-in emails aren't set up on this server yet.", 503)
-
-    conn = db.get_db()
-    now = int(time.time())
-    existing = conn.execute("SELECT sent_at FROM login_codes WHERE email = ?", (email,)).fetchone()
-    if existing and now - existing["sent_at"] < CODE_RESEND_WAIT:
-        return error("A code was just sent. Give it a few seconds.", 429)
-
-    code = f"{secrets.randbelow(10**6):06d}"
-    conn.execute(
-        "INSERT OR REPLACE INTO login_codes (email, code_hash, expires_at, sent_at, attempts) VALUES (?, ?, ?, ?, 0)",
-        (email, hash_code(email, code), now + CODE_TTL, now),
-    )
-    conn.commit()
-
-    try:
-        mailer.send_email(
-            email,
-            f"{code} is your Get It Done code",
-            f"Your sign-in code is {code}\n\nIt expires in 10 minutes. If you didn't ask for it, you can ignore this email.",
-        )
-    except Exception:
-        log.exception("Could not send sign-in code")
-        return error("We couldn't send an email to that address. Check it and try again.", 502)
-
-    resp = {"ok": True, "email": email}
-    if not mailer.configured():
-        resp["dev_code"] = code  # handy for local testing; never returned once email is set up
-    return jsonify(resp)
-
-
-@app.post("/auth/verify")
-def auth_verify():
-    body = request.get_json(silent=True) or {}
-    email = normalize_email(body.get("email"))
-    code = re.sub(r"\D", "", str(body.get("code", "")))
-    if not email or len(code) != 6:
-        return error("Enter the 6-digit code we emailed you.")
-
-    conn = db.get_db()
-    row = conn.execute("SELECT * FROM login_codes WHERE email = ?", (email,)).fetchone()
-    if not row or row["expires_at"] < time.time() or row["attempts"] >= CODE_MAX_ATTEMPTS:
-        return error("That code has expired. Request a new one.")
-    if not hmac.compare_digest(row["code_hash"], hash_code(email, code)):
-        conn.execute("UPDATE login_codes SET attempts = attempts + 1 WHERE email = ?", (email,))
-        conn.commit()
-        return error("That code isn't right. Try again.")
-
-    conn.execute("DELETE FROM login_codes WHERE email = ?", (email,))
-    user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    if user is None:
-        tz = body.get("timezone") if valid_timezone(body.get("timezone") or "") else "America/New_York"
-        conn.execute("INSERT INTO users (email, timezone) VALUES (?, ?)", (email, tz))
-        user = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    conn.commit()
-
-    session.clear()
-    session.permanent = True
-    session["uid"] = user["id"]
-    return jsonify(ok=True, needs_name=not user["name"])
-
-
-@app.post("/auth/logout")
-def logout():
-    session.clear()
-    return jsonify(ok=True)
-
-
-# ---------- account ----------
+# ---------- settings ----------
 
 @app.get("/api/me")
-@login_required
+@access_required
 def me():
     return jsonify(user_json(g.user))
 
 
 @app.patch("/api/me")
-@login_required
+@access_required
 def update_me():
     body = request.get_json(silent=True) or {}
     updates = {}
     if "name" in body:
         updates["name"] = str(body["name"] or "").strip()[:60]
+    if "email" in body:
+        raw = str(body["email"] or "").strip()
+        if raw and not normalize_email(raw):
+            return error("That doesn't look like an email address.")
+        updates["email"] = normalize_email(raw) or ""
     if "timezone" in body:
         if not valid_timezone(str(body["timezone"])):
             return error("Unknown timezone.")
@@ -247,22 +189,14 @@ def update_me():
         sets = ", ".join(f"{k} = ?" for k in updates)
         conn.execute(f"UPDATE users SET {sets} WHERE id = ?", (*updates.values(), g.user["id"]))
         conn.commit()
-    return jsonify(user_json(current_user()))
-
-
-@app.delete("/api/me")
-@login_required
-def delete_me():
-    conn = db.get_db()
-    conn.execute("DELETE FROM users WHERE id = ?", (g.user["id"],))
-    conn.commit()
-    session.clear()
-    return jsonify(ok=True)
+    return jsonify(user_json(owner()))
 
 
 @app.post("/api/me/test-email")
-@login_required
+@access_required
 def test_email():
+    if not g.user["email"]:
+        return error("Add an email address first.")
     last = session.get("last_test_email", 0)
     if time.time() - last < 60:
         return error("You just sent one. Try again in a minute.", 429)
@@ -296,12 +230,12 @@ def calendar_feed(token):
 
 
 @app.post("/api/me/feed/reset")
-@login_required
+@access_required
 def reset_feed():
     conn = db.get_db()
     conn.execute("UPDATE users SET feed_token = ? WHERE id = ?", (secrets.token_urlsafe(24), g.user["id"]))
     conn.commit()
-    return jsonify(user_json(current_user()))
+    return jsonify(user_json(owner()))
 
 
 def source_json(row):
@@ -309,7 +243,7 @@ def source_json(row):
 
 
 @app.get("/api/calendars")
-@login_required
+@access_required
 def list_calendars():
     rows = db.get_db().execute(
         "SELECT * FROM calendar_sources WHERE user_id = ? ORDER BY id", (g.user["id"],)
@@ -318,7 +252,7 @@ def list_calendars():
 
 
 @app.post("/api/calendars")
-@login_required
+@access_required
 def add_calendar():
     body = request.get_json(silent=True) or {}
     name = str(body.get("name") or "").strip()[:60] or "Calendar"
@@ -340,7 +274,7 @@ def add_calendar():
 
 
 @app.delete("/api/calendars/<int:source_id>")
-@login_required
+@access_required
 def delete_calendar(source_id):
     conn = db.get_db()
     conn.execute("DELETE FROM calendar_sources WHERE id = ? AND user_id = ?", (source_id, g.user["id"]))
@@ -349,7 +283,7 @@ def delete_calendar(source_id):
 
 
 @app.get("/api/events")
-@login_required
+@access_required
 def list_events():
     start, end = request.args.get("from", ""), request.args.get("to", "")
     if not (DATE_RE.match(start) and DATE_RE.match(end)):
@@ -435,7 +369,7 @@ def get_resource(kind):
 
 
 @app.get("/api/<kind>")
-@login_required
+@access_required
 def list_items(kind):
     spec = get_resource(kind)
     where, params = ["user_id = ?"], [g.user["id"]]
@@ -457,7 +391,7 @@ def list_items(kind):
 
 
 @app.post("/api/<kind>")
-@login_required
+@access_required
 def create_item(kind):
     get_resource(kind)
     try:
@@ -476,7 +410,7 @@ def create_item(kind):
 
 
 @app.patch("/api/<kind>/<int:item_id>")
-@login_required
+@access_required
 def update_item(kind, item_id):
     get_resource(kind)
     try:
@@ -497,7 +431,7 @@ def update_item(kind, item_id):
 
 
 @app.delete("/api/<kind>/<int:item_id>")
-@login_required
+@access_required
 def delete_item(kind, item_id):
     get_resource(kind)
     conn = db.get_db()
@@ -507,7 +441,7 @@ def delete_item(kind, item_id):
 
 
 @app.post("/api/groceries/clear")
-@login_required
+@access_required
 def clear_groceries():
     conn = db.get_db()
     conn.execute("DELETE FROM groceries WHERE user_id = ? AND done = 1", (g.user["id"],))

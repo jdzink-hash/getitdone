@@ -16,6 +16,14 @@ services:
         value: 3.11.9
       - key: SECRET_KEY
         generateValue: true
+      - key: ACCESS_KEY        # the secret in Andrina's private link: https://<your-site>/?key=<ACCESS_KEY>
+        generateValue: true
+      - key: OWNER_NAME
+        value: Andrina
+      - key: OWNER_EMAIL       # where the morning email goes (can also be changed in Settings)
+        sync: false
+      - key: OWNER_TIMEZONE    # e.g. America/Los_Angeles, America/Chicago, America/New_York
+        sync: false
       - key: DATABASE_PATH
         value: /var/data/getitdone.db
       - key: SECURE_COOKIES

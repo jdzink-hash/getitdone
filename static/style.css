@@ -240,7 +240,6 @@ button { cursor: pointer; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
 .btn.ghost:hover { border-color: var(--faint); opacity: 1; }
-.btn.danger { background: transparent; color: var(--danger); border-color: transparent; padding-left: 0; }
 
 .link-btn { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 0; }
 .link-btn:hover { color: var(--ink); }
@@ -383,7 +382,7 @@ a.btn { text-decoration: none; display: inline-block; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-/* ---------- login ---------- */
+/* ---------- private page ---------- */
 
 .auth {
   min-height: 100vh;
@@ -394,12 +393,6 @@ a.btn { text-decoration: none; display: inline-block; }
 .auth-card { width: 100%; max-width: 360px; }
 .auth-card h1 { font-family: var(--serif); font-weight: 400; font-size: 48px; line-height: 1; margin: 0 0 10px; }
 .auth-card p { color: var(--muted); margin: 0 0 28px; }
-.auth-card .field { margin-bottom: 12px; font-size: 16px; }
-.auth-card .btn { width: 100%; padding: 12px; }
-.auth-card .code-input { letter-spacing: .4em; text-align: center; font-variant-numeric: tabular-nums; }
-.auth-error { color: var(--danger); font-size: 14px; min-height: 20px; margin-top: 10px; }
-.auth-foot { color: var(--faint); font-size: 12px; margin-top: 28px; line-height: 1.6; }
-.auth-step[hidden] { display: none; }
 
 @media (max-width: 520px) {
   .wrap { padding-top: 32px; }

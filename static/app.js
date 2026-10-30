@@ -26,10 +26,6 @@ async function api(method, path, body) {
     headers: { "X-Requested-With": "fetch", ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 401) {
-    location.href = "/login";
-    throw new Error("Signed out");
-  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Something went wrong.");
   return data;
@@ -424,6 +420,9 @@ views.settings = () => {
         h("label", { class: "toggle" },
           h("input", { type: "checkbox", checked: me.digest_enabled, onchange: (e) => save({ digest_enabled: e.target.checked }) }),
           h("span"))),
+      setting("Send to", me.email ? null : "Add an email address to get the morning email.",
+        h("input", { class: "field", type: "email", value: me.email, placeholder: "you@example.com", maxLength: 254,
+          onchange: (e) => save({ email: e.target.value }) })),
       setting("Send at", null,
         h("input", { class: "field", type: "time", value: me.send_time, onchange: (e) => e.target.value && save({ send_time: e.target.value }) })),
       setting("Time zone", null,
@@ -443,20 +442,9 @@ views.settings = () => {
         }, "Email me today's list now")),
       preview),
     calendarSettings(),
-    section("Account", {},
-      setting("Name", null,
-        h("input", { class: "field", value: me.name, maxLength: 60, onchange: (e) => save({ name: e.target.value }) })),
-      setting("Email", null, h("span", { class: "section-note" }, me.email)),
-      h("div", { style: "display:flex; gap:12px; padding-top:18px; align-items:center" },
-        h("button", { class: "btn ghost", onclick: attempt(async () => { await api("POST", "/auth/logout"); location.href = "/login"; }) }, "Sign out"),
-        h("button", {
-          class: "btn danger",
-          onclick: attempt(async () => {
-            if (!confirm("Delete your account and everything in it? This can't be undone.")) return;
-            await api("DELETE", "/api/me");
-            location.href = "/login";
-          }),
-        }, "Delete account"))),
+    section("You", {},
+      setting("Name", "Used in your greeting and morning email.",
+        h("input", { class: "field", value: me.name, maxLength: 60, onchange: (e) => save({ name: e.target.value }) }))),
   ];
 };
 
